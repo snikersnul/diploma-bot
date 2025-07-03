@@ -24,9 +24,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-GOOGLE_SHEET_ID = "YOUR_GOOGLE_SHEET_ID_HERE"
+TELEGRAM_BOT_TOKEN = "7754845550:AAH7-ciDXMkBWW5qgYMwq6C1wvMOrzWDa7w"
+GOOGLE_SHEET_ID = "1Ep1uf33Qg-gQxarhQbMo6nRFqE7RmVQlBrv_fOXVi6U"
 GOOGLE_CREDENTIALS_FILE = "path/to/your/credentials.json"
+
+credentials_json = os.getenv('GOOGLE_CREDENTIALS')
+if credentials_json:
+    with open('temp_credentials.json', 'w') as f:
+        f.write(credentials_json)
+    GOOGLE_CREDENTIALS_FILE = 'temp_credentials.json'
 
 class DiplomaBot:
     def __init__(self):
