@@ -15,6 +15,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google.oauth2.service_account import Credentials
+pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))  # путь к файлу .ttf
+
 
 # Настройки логирования
 logging.basicConfig(
@@ -122,10 +124,12 @@ class DiplomaBot:
         title_style = styles['Title']
         title_style.alignment = TA_CENTER
         title_style.fontSize = 24
+        title_style.fontName = 'DejaVuSans'
         
         normal_style = styles['Normal']
         normal_style.alignment = TA_CENTER
         normal_style.fontSize = 14
+        title_style.fontName = 'DejaVuSans'
         
         # Содержание диплома
         story.append(Spacer(1, 3*cm))
@@ -138,6 +142,7 @@ class DiplomaBot:
         name_style = styles['Heading1']
         name_style.alignment = TA_CENTER
         name_style.fontSize = 20
+        title_style.fontName = 'DejaVuSans'
         story.append(Paragraph(participant.get('имя', participant.get('name', 'Участник')), name_style))
         
         story.append(Spacer(1, 1*cm))
