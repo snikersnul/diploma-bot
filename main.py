@@ -1,3 +1,39 @@
+import requests
+import time
+import sys
+
+# Ваш токен бота
+BOT_TOKEN = "7754845550:AAH7-ciDXMkBWW5qgYMwq6C1wvMOrzWDa7w"
+
+def clear_bot_state():
+    """Полная очистка состояния бота"""
+    try:
+        # Удаляем webhook
+        response = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
+        print(f"Webhook cleared: {response.json()}")
+        
+        # Получаем все pending updates и очищаем их
+        response = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates", 
+                               json={"offset": -1, "limit": 1})
+        if response.status_code == 200:
+            data = response.json()
+            if data['result']:
+                last_update_id = data['result'][0]['update_id']
+                # Пропускаем все старые обновления
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates", 
+                            json={"offset": last_update_id + 1, "limit": 1})
+                print(f"Cleared pending updates up to {last_update_id}")
+        
+        print("Bot state cleared successfully")
+        time.sleep(5)  # Ждем 5 секунд перед запуском
+        
+    except Exception as e:
+        print(f"Error clearing bot state: {e}")
+        sys.exit(1)
+
+# Очищаем состояние при запуске
+clear_bot_state()
+
 import logging
 import os
 import json
@@ -17,10 +53,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from google.oauth2.service_account import Credentials
 
 import requests
-
-# Очистка webhook
-BOT_TOKEN = "7754845550:AAH7-ciDXMkBWW5qgYMwq6C1wvMOrzWDa7w"
-requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
 
 # Настройки логирования
 logging.basicConfig(
