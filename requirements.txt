@@ -1,6 +1,6 @@
-python-telegram-bot==20.3
-gspread==5.10.0
-reportlab==4.0.4
-google-auth==2.17.3
-google-auth-oauthlib==1.0.0
-google-auth-httplib2==0.1.0
+python-telegram-bot==20.7
+gspread==5.12.4
+google-auth==2.27.0
+reportlab==4.0.7
+requests==2.31.0
+aiohttp==3.9.1
