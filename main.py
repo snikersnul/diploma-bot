@@ -258,7 +258,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename=filename,
             caption=f"🎓 Ваш {diploma_type.lower()} готов!"
         )
-        
+        # Отправка PDF на email
+        recipient_email = participant.get('email')
+        if recipient_email:
+            try:
+                # Вернуть указатель на начало файла
+                pdf_buffer.seek(0)
+                send_email_with_attachment(recipient_email, pdf_buffer, filename)
+                await update.message.reply_text(f"📬 Диплом также отправлен на email: {recipient_email}")
+            except Exception as e:
+                await update.message.reply_text("⚠️ Не удалось отправить диплом по email.")
+                logger.error(f"Ошибка при отправке email: {e}")
     except Exception as e:
         logger.error(f"Ошибка генерации диплома: {e}")
         await update.message.reply_text(
@@ -291,6 +301,32 @@ def main():
     # Запуск бота
     logger.info("Бот запущен...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+import smtplib
+from email.message import EmailMessage
+
+def send_email_with_attachment(to_email: str, pdf_buffer: BytesIO, filename: str):
+    """Отправка PDF диплома по email"""
+    try:
+        msg = EmailMessage()
+        msg['Subject'] = 'Ваш диплом конференции'
+        msg['From'] = os.getenv('EMAIL_USER')
+        msg['To'] = to_email
+        msg.set_content('Здравствуйте!\n\nВо вложении — ваш диплом.\n\nС уважением, команда конференции.')
+
+        # Прикрепляем PDF
+        pdf_data = pdf_buffer.read()
+        msg.add_attachment(pdf_data, maintype='application', subtype='pdf', filename=filename)
+
+        # Отправка
+        with smtplib.SMTP(os.getenv('EMAIL_HOST'), int(os.getenv('EMAIL_PORT'))) as smtp:
+            smtp.starttls()
+            smtp.login(os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
+            smtp.send_message(msg)
+
+        logger.info(f"📧 Email успешно отправлен на {to_email}")
+
+    except Exception as e:
+        logger.error(f"Ошибка отправки email: {e}")
 
 if __name__ == '__main__':
     main()
