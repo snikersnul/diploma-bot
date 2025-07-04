@@ -97,7 +97,11 @@ class DiplomaBot:
     def determine_diploma_type(self, participant: Dict) -> Tuple[str, str]:
         """Определение типа диплома на основе данных участника"""
         role = participant.get('роль', '').lower()
-        points = int(participant.get('баллы', 0))
+        raw_points = participant.get('баллы', 0)
+        try:
+            points = int(raw_points) if str(raw_points).strip().isdigit() else 0
+        except Exception:
+            points = 0
         
         # Определяем тип диплома
         if 'организатор' in role:
