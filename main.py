@@ -1,6 +1,6 @@
 import logging
 import os
-import re
+import json
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 
@@ -23,16 +23,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Конфигурация
-TELEGRAM_BOT_TOKEN = "7754845550:AAH7-ciDXMkBWW5qgYMwq6C1wvMOrzWDa7w"
-GOOGLE_SHEET_ID = "1Ep1uf33Qg-gQxarhQbMo6nRFqE7RmVQlBrv_fOXVi6U"
-GOOGLE_CREDENTIALS_FILE = "path/to/your/credentials.json"
+# Конфигурация из переменных окружения
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
 
+# Создаем временный файл credentials из переменной окружения
 credentials_json = os.getenv('GOOGLE_CREDENTIALS')
 if credentials_json:
     with open('temp_credentials.json', 'w') as f:
         f.write(credentials_json)
     GOOGLE_CREDENTIALS_FILE = 'temp_credentials.json'
+else:
+    GOOGLE_CREDENTIALS_FILE = "credentials.json"
 
 class DiplomaBot:
     def __init__(self):
@@ -260,6 +262,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Основная функция запуска бота"""
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN не задан!")
+        return
+    
+    if not GOOGLE_SHEET_ID:
+        logger.error("GOOGLE_SHEET_ID не задан!")
+        return
+    
     # Создание приложения
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
