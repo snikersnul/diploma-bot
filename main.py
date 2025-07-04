@@ -69,7 +69,7 @@ class DiplomaBot:
             records = self.sheet.get_all_records()
             self.participants_data = records
             logger.info(f"Загружено {len(records)} участников")
-            
+        logger.info(f"Пример первой записи: {records[0] if records else 'Нет данных'}")    
         except Exception as e:
             logger.error(f"Ошибка загрузки данных: {e}")
     
