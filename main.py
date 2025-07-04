@@ -85,12 +85,15 @@ class DiplomaBot:
                 return participant
             
             # Поиск по ФИО
-            if 'имя' in participant and query_lower in participant['имя'].lower():
-                return participant
-                
-            # Альтернативные названия полей
-            if 'name' in participant and query_lower in participant['name'].lower():
-                return participant
+            name_field = participant.get('имя') or participant.get('name')
+            if name_field:
+                name_lower = name_field.lower().strip()
+                name_words = set(name_lower.split())
+                query_words = set(query_lower.split())
+
+                # Все слова запроса должны присутствовать в имени
+                if query_words.issubset(name_words):
+                    return participant
                 
         return None
     
