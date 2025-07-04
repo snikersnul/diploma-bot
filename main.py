@@ -16,6 +16,12 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google.oauth2.service_account import Credentials
 
+import requests
+
+# Очистка webhook
+BOT_TOKEN = "7754845550:AAH7-ciDXMkBWW5qgYMwq6C1wvMOrzWDa7w"
+requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
+
 # Настройки логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
