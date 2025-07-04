@@ -129,7 +129,7 @@ class DiplomaBot:
         normal_style = styles['Normal']
         normal_style.alignment = TA_CENTER
         normal_style.fontSize = 14
-        title_style.fontName = 'DejaVuSans'
+        normal_style.fontName = 'DejaVuSans'
         
         # Содержание диплома
         story.append(Spacer(1, 3*cm))
@@ -142,7 +142,7 @@ class DiplomaBot:
         name_style = styles['Heading1']
         name_style.alignment = TA_CENTER
         name_style.fontSize = 20
-        title_style.fontName = 'DejaVuSans'
+        name_style.fontName = 'DejaVuSans'
         story.append(Paragraph(participant.get('имя', participant.get('name', 'Участник')), name_style))
         
         story.append(Spacer(1, 1*cm))
