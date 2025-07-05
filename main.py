@@ -276,11 +276,11 @@ def get_main_keyboard(is_admin_user: bool = False):
     """Получение основной клавиатуры"""
     keyboard = [
         [KeyboardButton("📜 Запросить диплом")],
-        [KeyboardButton("🔄 Обновить данные"), KeyboardButton("ℹ️ Статус данных")],
-        [KeyboardButton("ℹ️ Показать все данные")]
+        [KeyboardButton("🔄 Обновить данные"), KeyboardButton("ℹ️ Статус данных")]
     ]
 
     if is_admin_user:
+        keyboard.append([KeyboardButton("ℹ️ Показать все данные")])
         keyboard.append([KeyboardButton("👑 Админ панель")])
 
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -435,6 +435,12 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_show_all_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка кнопки показа всех записей"""
+    user_id = update.effective_user.id
+    
+    if not_is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа админа, обратитесь к @abiggerfish")
+        return
+    
     bot = context.bot_data.get('diploma_bot')
     if not bot:
         await update.message.reply_text("❌ Ошибка подключения к базе данных")
