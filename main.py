@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
 import gspread
+from google.oauth2.service_account import Credentials
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import cm
@@ -92,6 +93,10 @@ class DiplomaBot:
     def load_participants_data(self):
         """Загрузка данных участников из Google Sheets"""
         try:
+            if self.sheet is None:
+                logger.error("Google sheets не инициализирован")
+                return
+
             records = self.sheet.get_all_records()
             self.participants_data = records
             self.last_update = datetime.now()
@@ -103,6 +108,10 @@ class DiplomaBot:
     def add_participant(self, name: str, email: str, role: str, points: int) -> bool:
         """Добавление нового участника в таблицу"""
         try:
+            if self.sheet is None:
+                logger.error("Google Sheets не инициализирован")
+                return False
+
             self.sheet.append_row([name, email, role, points])
             self.load_participants_data() # Обновляем локальные данные
             logger.info(f"Добавлен участник: {name}, {email}, {role}, {points}")
@@ -114,6 +123,9 @@ class DiplomaBot:
     def remove_participant(self, email: str) -> bool:
         """Удаление участника по email"""
         try:
+            if self.sheet is None:
+                logger.error("Google Sheets не инициализирован")
+                return False
             all_values = self.sheet.get_all_values()
             for i, row in enumerate(all_values):
                 if len(row) > 1 and row[1].lower() == email.lower():
