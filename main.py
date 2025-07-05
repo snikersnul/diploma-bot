@@ -2,7 +2,7 @@ import logging
 import os
 import json
 from io import BytesIO
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple
 
 import gspread
 from reportlab.lib.pagesizes import A4
@@ -15,25 +15,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timedelta
-import asyncio
 pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))  # путь к файлу .ttf
-
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
-
-def run_fake_server():
-    server_address = ('0.0.0.0', 10000)
-    httpd = HTTPServer(server_address, HealthHandler)
-    httpd.serve_forever()
-
-threading.Thread(target=run_fake_server, daemon=True).start()
 
 # Настройки логирования
 logging.basicConfig(
@@ -55,84 +37,12 @@ if credentials_json:
 else:
     GOOGLE_CREDENTIALS_FILE = "credentials.json"
 
-from some_module import (
-    GoogleSheetsService, DiplomaGenerator, EmailService, 
-    start, diploma_command, help_command, 
-    run_health_server, validate_environment, TELEGRAM_BOT_TOKEN,
-    EMAIL_USER, logger
-)
-
-class GoogleSheetsService:
-    def __init__(self):
-        self.gc = None
-        self.sheet = None
-        self.participants_data = []
-        self.last_update = None
-        self.update_interval = 30 * 60  # 30 минут в секундах
-        self._setup_credentials()
-        self.init_google_sheets()
-
-    def force_reload_data(self):
-        """Принудительная перезагрузка данных"""
-        try:
-            logger.info("🔄 Принудительная перезагрузка данных из Google Sheets...")
-            records = self.sheet.get_all_records()
-            self.participants_data = records
-            self.last_update = datetime.now()
-            logger.info(f"✅ Данные обновлены. Загружено {len(records)} участников")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Ошибка принудительной перезагрузки: {e}")
-            return False
-
-    def is_data_outdated(self) -> bool:
-        """Проверить, устарели ли данные"""
-        if not self.last_update:
-            return True
-        return datetime.now() - self.last_update > timedelta(seconds=self.update_interval)
-
-    def get_last_update_info(self) -> str:
-        """Получить информацию о последнем обновлении"""
-        if not self.last_update:
-            return "Данные не загружены"
-
-        time_diff = datetime.now() - self.last_update
-        minutes_ago = int(time_diff.total_seconds() / 60)
-
-        if minutes_ago < 1:
-            return "Обновлено только что"
-        elif minutes_ago < 60:
-            return f"Обновлено {minutes_ago} мин назад"
-        else:
-            hours_ago = minutes_ago // 60
-            return f"Обновлено {hours_ago} ч назад"
-
 class DiplomaBot:
     def __init__(self):
         self.gc = None
         self.sheet = None
         self.participants_data = []
         self.init_google_sheets()
-        
-        self.sheets_service = GoogleSheetsService()
-        self.diploma_generator = DiplomaGenerator()
-        self.email_service = EmailService()
-        self.admin_users: Set[int] = set()
-        admin_ids = os.getenv('ADMIN_USER_IDS', '')
-        if admin_ids:
-            self.admin_users = {int(uid.strip()) for uid in admin_ids.split(',') if uid.strip()}
-    
-
-    def is_admin(self, user_id: int) -> bool:
-        return user_id in self.admin_users
-
-    def find_participant_with_refresh(self, query: str):
-        participant = self.sheets_service.find_participant(query)
-        if not participant:
-            logger.info("🔄 Участник не найден. Обновляем данные...")
-            if self.sheets_service.force_reload_data():
-                participant = self.sheets_service.find_participant(query)
-        return participant
 
     def init_google_sheets(self):
         """Инициализация подключения к Google Sheets"""
@@ -140,19 +50,19 @@ class DiplomaBot:
             # Настройка аутентификации
             scope = ['https://spreadsheets.google.com/feeds',
                     'https://www.googleapis.com/auth/drive']
-            
+
             creds = Credentials.from_service_account_file(
                 GOOGLE_CREDENTIALS_FILE, scopes=scope)
-            
+
             self.gc = gspread.authorize(creds)
             self.sheet = self.gc.open_by_key(GOOGLE_SHEET_ID).sheet1
-            
+
             # Загрузка данных участников
             self.load_participants_data()
-            
+
         except Exception as e:
             logger.error(f"Ошибка инициализации Google Sheets: {e}")
-    
+
     def load_participants_data(self):
         """Загрузка данных участников из Google Sheets"""
         try:
@@ -163,16 +73,16 @@ class DiplomaBot:
             logger.info(f"Пример первой записи: {records[0] if records else 'Нет данных'}")    
         except Exception as e:
             logger.error(f"Ошибка загрузки данных: {e}")
-    
+
     def find_participant(self, query: str) -> Optional[Dict]:
         """Поиск участника по email или ФИО"""
         query_lower = query.lower().strip()
-        
+
         for participant in self.participants_data:
             # Поиск по email
             if 'email' in participant and participant['email'].lower() == query_lower:
                 return participant
-            
+
             # Поиск по ФИО
             name_field = participant.get('имя') or participant.get('name')
             if name_field:
@@ -183,9 +93,9 @@ class DiplomaBot:
                 # Все слова запроса должны присутствовать в имени
                 if query_words.issubset(name_words):
                     return participant
-                
+
         return None
-    
+
     def determine_diploma_type(self, participant: Dict) -> Tuple[str, str]:
         """Определение типа диплома на основе данных участника"""
         role = participant.get('роль', '').lower()
@@ -194,7 +104,7 @@ class DiplomaBot:
             points = int(raw_points) if str(raw_points).strip().isdigit() else 0
         except Exception:
             points = 0
-        
+
         # Определяем тип диплома
         if 'организатор' in role:
             return 'Диплом организатора', 'за организацию конференции'
@@ -208,49 +118,49 @@ class DiplomaBot:
             return 'Диплом участника', 'за участие в конференции'
         else:
             return None, None
-    
+
     def generate_diploma_pdf(self, participant: Dict, diploma_type: str, description: str) -> BytesIO:
         """Генерация PDF диплома"""
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4)
         story = []
-        
+
         # Стили
         styles = getSampleStyleSheet()
         title_style = styles['Title']
         title_style.alignment = TA_CENTER
         title_style.fontSize = 24
         title_style.fontName = 'DejaVuSans'
-        
+
         normal_style = styles['Normal']
         normal_style.alignment = TA_CENTER
         normal_style.fontSize = 14
         normal_style.fontName = 'DejaVuSans'
-        
+
         # Содержание диплома
         story.append(Spacer(1, 3*cm))
         story.append(Paragraph(diploma_type, title_style))
         story.append(Spacer(1, 2*cm))
-        
+
         story.append(Paragraph("Настоящий диплом выдается", normal_style))
         story.append(Spacer(1, 1*cm))
-        
+
         name_style = styles['Heading1']
         name_style.alignment = TA_CENTER
         name_style.fontSize = 20
         name_style.fontName = 'DejaVuSans'
         story.append(Paragraph(participant.get('имя', participant.get('name', 'Участник')), name_style))
-        
+
         story.append(Spacer(1, 1*cm))
         story.append(Paragraph(description, normal_style))
         story.append(Spacer(1, 2*cm))
-        
+
         story.append(Paragraph("Организаторы конференции", normal_style))
         story.append(Spacer(1, 1*cm))
-        
+
         from datetime import datetime
         story.append(Paragraph(f"Дата: {datetime.now().strftime('%d.%m.%Y')}", normal_style))
-        
+
         # Создание PDF
         doc.build(story)
         buffer.seek(0)
@@ -272,10 +182,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /diploma - запросить диплом
 /help - помощь
     """
-    
+
     keyboard = [[KeyboardButton("📜 Запросить диплом")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
+
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
 async def diploma_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -304,28 +214,33 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(help_text)
 
-async def handle_text_updated(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений"""
     query = update.message.text
+
+    # Игнорируем команды клавиатуры
     if query == "📜 Запросить диплом":
         await diploma_command(update, context)
         return
 
+    # Поиск участника
     await update.message.reply_text("🔍 Ищу вас в базе участников...")
+
     bot = context.bot_data.get('diploma_bot')
     if not bot:
         await update.message.reply_text("❌ Ошибка подключения к базе данных")
         return
 
-    participant = bot.find_participant_with_refresh(query)
+    participant = bot.find_participant(query)
 
     if not participant:
         await update.message.reply_text(
             "❌ Участник не найден в базе данных.\n"
-            "Проверьте правильность написания email или ФИО.\n"
-            "Данные были обновлены из Google Sheets."
+            "Проверьте правильность написания email или ФИО."
         )
         return
 
+    # Определение типа диплома
     diploma_type, description = bot.determine_diploma_type(participant)
 
     if not diploma_type:
@@ -335,101 +250,63 @@ async def handle_text_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # Генерация диплома
     try:
-        participant_name = participant.get('имя') or participant.get('name') or 'Участник'
-        await update.message.reply_text(f"✅ Найден участник: {participant_name}")
+        await update.message.reply_text(f"✅ Найден участник: {participant.get('имя', participant.get('name'))}")
         await update.message.reply_text(f"📜 Генерирую {diploma_type.lower()}...")
 
-        pdf_buffer = bot.generate_diploma(participant, diploma_type, description)
-        filename = f"diploma_{participant_name.replace(' ', '_')}.pdf"
+        pdf_buffer = bot.generate_diploma_pdf(participant, diploma_type, description)
+
+        # Отправка PDF
+        filename = f"diploma_{participant.get('имя', 'participant').replace(' ', '_')}.pdf"
         await update.message.reply_document(
             document=pdf_buffer,
             filename=filename,
             caption=f"🎓 Ваш {diploma_type.lower()} готов!"
         )
-
+        # Отправка PDF на email
         recipient_email = participant.get('email')
-        if recipient_email and EMAIL_USER:
+        if recipient_email:
             try:
+                # Вернуть указатель на начало файла
                 pdf_buffer.seek(0)
-                bot.send_email(recipient_email, pdf_buffer, filename)
+                send_email_with_attachment(recipient_email, pdf_buffer, filename)
                 await update.message.reply_text(f"📬 Диплом также отправлен на email: {recipient_email}")
             except Exception as e:
                 await update.message.reply_text("⚠️ Не удалось отправить диплом по email.")
-                logger.error(f"Email sending error: {e}")
+                logger.error(f"Ошибка при отправке email: {e}")
     except Exception as e:
-        logger.error(f"Diploma generation error: {e}")
-        await update.message.reply_text("❌ Ошибка при генерации диплома. Обратитесь к организаторам.")
-
-async def auto_update_task(sheets_service: GoogleSheetsService):
-    """Автоматическое обновление данных каждые 30 минут"""
-    while True:
-        try:
-            await asyncio.sleep(1800)
-            logger.info("🕐 Время автоматического обновления данных…")
-            if sheets_service.force_reload_data():
-                logger.info("✅ Автоматическое обновление выполнено")
-            else:
-                logger.error("❌ Ошибка автоматического обновления")
-        except Exception as e:
-            logger.error(f"❌ Ошибка в задаче автоматического обновления: {e}")
-            await asyncio.sleep(300)
-async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    bot = context.bot_data.get('diploma_bot')
-    if not bot or not bot.is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав для выполнения этой команды")
-        return
-
-    await update.message.reply_text("🔄 Обновляю данные из Google Sheets...")
-
-    if bot.sheets_service.force_reload_data():
-        count = len(bot.sheets_service.participants_data)
-        await update.message.reply_text(f"✅ Данные успешно обновлены!\nЗагружено участников: {count}")
-    else:
-        await update.message.reply_text("❌ Ошибка при обновлении данных")
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    bot = context.bot_data.get('diploma_bot')
-    if not bot or not bot.is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав для выполнения этой команды")
-        return
-
-    sheets_service = bot.sheets_service
-    status_text = f"""
-📊 **Статус системы:**
-
-👥 Участников в базе: {len(sheets_service.participants_data)}
-🕐 {sheets_service.get_last_update_info()}
-📡 Данные {'устарели' if sheets_service.is_data_outdated() else 'актуальны'}
-
-🔧 Автообновление: каждые 30 минут
-"""
-    await update.message.reply_text(status_text)
+        logger.error(f"Ошибка генерации диплома: {e}")
+        await update.message.reply_text(
+            "❌ Ошибка при генерации диплома. Обратитесь к организаторам."
+        )
 
 def main():
     """Основная функция запуска бота"""
-    if not validate_environment():
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN не задан!")
         return
 
-    threading.Thread(target=run_health_server, daemon=True).start()
+    if not GOOGLE_SHEET_ID:
+        logger.error("GOOGLE_SHEET_ID не задан!")
+        return
+
+    # Создание приложения
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Инициализация бота
     diploma_bot = DiplomaBot()
     application.bot_data['diploma_bot'] = diploma_bot
 
-    asyncio.create_task(auto_update_task(diploma_bot.sheets_service))
-
+    # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("diploma", diploma_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("reload", reload_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_updated))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    logger.info("Bot started...")
+    # Запуск бота
+    logger.info("Бот запущен...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
 import smtplib
 from email.message import EmailMessage
 
