@@ -276,7 +276,8 @@ def get_main_keyboard(is_admin_user: bool = False):
     """Получение основной клавиатуры"""
     keyboard = [
         [KeyboardButton("📜 Запросить диплом")],
-        [KeyboardButton("🔄 Обновить данные"), KeyboardButton("ℹ️ Статус данных")]
+        [KeyboardButton("🔄 Обновить данные"), KeyboardButton("ℹ️ Статус данных")],
+        [KeyboardButton("ℹ️ Показать все данные")]
     ]
 
     if is_admin_user:
@@ -432,6 +433,40 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard(is_admin_user)
     )
 
+async def handle_show_all_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки показа всех записей"""
+    bot = context.bot_data.get('diploma_bot')
+    if not bot:
+        await update.message.reply_text("❌ Ошибка подключения к базе данных")
+        return
+
+    if not bot.participants_data:
+        await update.message.reply_text("📋 База данных пуста")
+        return
+
+    # Формируем список всех записей
+    records_text = f"📋 Все записи ({len(bot.participants_data)} участников):\n\n"
+
+    for i, participant in enumerate(bot.participants_data, 1):
+        name = participant.get('имя') or participant.get('name') or 'Не указано'
+        email = participant.get('email') or 'Не указан'
+        role = participant.get('роль') or participant.get('role') or 'Не указана'
+        points = participant.get('баллы') or participant.get('points') or 0
+        
+        records_text += f"{i}. {name}\n"
+        records_text += f"   📧 {email}\n"
+        records_text += f"   👤 {role}\n"
+        records_text += f"   🎯 {points} баллов\n\n"
+        
+        # Если сообщение становится слишком длинным, отправляем его и начинаем новое
+        if len(records_text) > 3500:  # Оставляем запас до лимита Telegram (4096 символов)
+            await update.message.reply_text(records_text)
+            records_text = ""
+
+    # Отправляем оставшийся текст, если он есть
+    if records_text:
+        await update.message.reply_text(records_text)
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений"""
     query = update.message.text
@@ -457,6 +492,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif query == "🔙 Главное меню":
         await handle_main_menu(update, context)
+        return
+    elif query == "ℹ️ Показать все данные":
+        await handle_show_all_records(update, context)
         return
 
     # Обработка админских действий
