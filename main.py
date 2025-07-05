@@ -2,7 +2,7 @@ import logging
 import os
 import json
 from io import BytesIO
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 import gspread
 from reportlab.lib.pagesizes import A4
@@ -15,6 +15,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google.oauth2.service_account import Credentials
+from datetime import datetime, timedelta
+import asyncio
 pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))  # путь к файлу .ttf
 
 import threading
@@ -53,6 +55,58 @@ if credentials_json:
 else:
     GOOGLE_CREDENTIALS_FILE = "credentials.json"
 
+from some_module import (
+    GoogleSheetsService, DiplomaGenerator, EmailService, 
+    start, diploma_command, help_command, 
+    run_health_server, validate_environment, TELEGRAM_BOT_TOKEN,
+    EMAIL_USER, logger
+)
+
+class GoogleSheetsService:
+    def __init__(self):
+        self.gc = None
+        self.sheet = None
+        self.participants_data = []
+        self.last_update = None
+        self.update_interval = 30 * 60  # 30 минут в секундах
+        self._setup_credentials()
+        self.init_google_sheets()
+
+    def force_reload_data(self):
+        """Принудительная перезагрузка данных"""
+        try:
+            logger.info("🔄 Принудительная перезагрузка данных из Google Sheets...")
+            records = self.sheet.get_all_records()
+            self.participants_data = records
+            self.last_update = datetime.now()
+            logger.info(f"✅ Данные обновлены. Загружено {len(records)} участников")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка принудительной перезагрузки: {e}")
+            return False
+
+    def is_data_outdated(self) -> bool:
+        """Проверить, устарели ли данные"""
+        if not self.last_update:
+            return True
+        return datetime.now() - self.last_update > timedelta(seconds=self.update_interval)
+
+    def get_last_update_info(self) -> str:
+        """Получить информацию о последнем обновлении"""
+        if not self.last_update:
+            return "Данные не загружены"
+
+        time_diff = datetime.now() - self.last_update
+        minutes_ago = int(time_diff.total_seconds() / 60)
+
+        if minutes_ago < 1:
+            return "Обновлено только что"
+        elif minutes_ago < 60:
+            return f"Обновлено {minutes_ago} мин назад"
+        else:
+            hours_ago = minutes_ago // 60
+            return f"Обновлено {hours_ago} ч назад"
+
 class DiplomaBot:
     def __init__(self):
         self.gc = None
@@ -60,6 +114,26 @@ class DiplomaBot:
         self.participants_data = []
         self.init_google_sheets()
         
+        self.sheets_service = GoogleSheetsService()
+        self.diploma_generator = DiplomaGenerator()
+        self.email_service = EmailService()
+        self.admin_users: Set[int] = set()
+        admin_ids = os.getenv('ADMIN_USER_IDS', '')
+        if admin_ids:
+            self.admin_users = {int(uid.strip()) for uid in admin_ids.split(',') if uid.strip()}
+    
+
+    def is_admin(self, user_id: int) -> bool:
+        return user_id in self.admin_users
+
+    def find_participant_with_refresh(self, query: str):
+        participant = self.sheets_service.find_participant(query)
+        if not participant:
+            logger.info("🔄 Участник не найден. Обновляем данные...")
+            if self.sheets_service.force_reload_data():
+                participant = self.sheets_service.find_participant(query)
+        return participant
+
     def init_google_sheets(self):
         """Инициализация подключения к Google Sheets"""
         try:
@@ -230,99 +304,132 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(help_text)
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка текстовых сообщений"""
+async def handle_text_updated(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
-    
-    # Игнорируем команды клавиатуры
     if query == "📜 Запросить диплом":
         await diploma_command(update, context)
         return
-    
-    # Поиск участника
+
     await update.message.reply_text("🔍 Ищу вас в базе участников...")
-    
     bot = context.bot_data.get('diploma_bot')
     if not bot:
         await update.message.reply_text("❌ Ошибка подключения к базе данных")
         return
-    
-    participant = bot.find_participant(query)
-    
+
+    participant = bot.find_participant_with_refresh(query)
+
     if not participant:
         await update.message.reply_text(
             "❌ Участник не найден в базе данных.\n"
-            "Проверьте правильность написания email или ФИО."
+            "Проверьте правильность написания email или ФИО.\n"
+            "Данные были обновлены из Google Sheets."
         )
         return
-    
-    # Определение типа диплома
+
     diploma_type, description = bot.determine_diploma_type(participant)
-    
+
     if not diploma_type:
         await update.message.reply_text(
             "❌ К сожалению, диплом для вас не предусмотрен.\n"
             "Возможно, не выполнены условия для получения диплома."
         )
         return
-    
-    # Генерация диплома
+
     try:
-        await update.message.reply_text(f"✅ Найден участник: {participant.get('имя', participant.get('name'))}")
+        participant_name = participant.get('имя') or participant.get('name') or 'Участник'
+        await update.message.reply_text(f"✅ Найден участник: {participant_name}")
         await update.message.reply_text(f"📜 Генерирую {diploma_type.lower()}...")
-        
-        pdf_buffer = bot.generate_diploma_pdf(participant, diploma_type, description)
-        
-        # Отправка PDF
-        filename = f"diploma_{participant.get('имя', 'participant').replace(' ', '_')}.pdf"
+
+        pdf_buffer = bot.generate_diploma(participant, diploma_type, description)
+        filename = f"diploma_{participant_name.replace(' ', '_')}.pdf"
         await update.message.reply_document(
             document=pdf_buffer,
             filename=filename,
             caption=f"🎓 Ваш {diploma_type.lower()} готов!"
         )
-        # Отправка PDF на email
+
         recipient_email = participant.get('email')
-        if recipient_email:
+        if recipient_email and EMAIL_USER:
             try:
-                # Вернуть указатель на начало файла
                 pdf_buffer.seek(0)
-                send_email_with_attachment(recipient_email, pdf_buffer, filename)
+                bot.send_email(recipient_email, pdf_buffer, filename)
                 await update.message.reply_text(f"📬 Диплом также отправлен на email: {recipient_email}")
             except Exception as e:
                 await update.message.reply_text("⚠️ Не удалось отправить диплом по email.")
-                logger.error(f"Ошибка при отправке email: {e}")
+                logger.error(f"Email sending error: {e}")
     except Exception as e:
-        logger.error(f"Ошибка генерации диплома: {e}")
-        await update.message.reply_text(
-            "❌ Ошибка при генерации диплома. Обратитесь к организаторам."
-        )
+        logger.error(f"Diploma generation error: {e}")
+        await update.message.reply_text("❌ Ошибка при генерации диплома. Обратитесь к организаторам.")
+
+async def auto_update_task(sheets_service: GoogleSheetsService):
+    """Автоматическое обновление данных каждые 30 минут"""
+    while True:
+        try:
+            await asyncio.sleep(1800)
+            logger.info("🕐 Время автоматического обновления данных…")
+            if sheets_service.force_reload_data():
+                logger.info("✅ Автоматическое обновление выполнено")
+            else:
+                logger.error("❌ Ошибка автоматического обновления")
+        except Exception as e:
+            logger.error(f"❌ Ошибка в задаче автоматического обновления: {e}")
+            await asyncio.sleep(300)
+async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    bot = context.bot_data.get('diploma_bot')
+    if not bot or not bot.is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав для выполнения этой команды")
+        return
+
+    await update.message.reply_text("🔄 Обновляю данные из Google Sheets...")
+
+    if bot.sheets_service.force_reload_data():
+        count = len(bot.sheets_service.participants_data)
+        await update.message.reply_text(f"✅ Данные успешно обновлены!\nЗагружено участников: {count}")
+    else:
+        await update.message.reply_text("❌ Ошибка при обновлении данных")
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    bot = context.bot_data.get('diploma_bot')
+    if not bot or not bot.is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав для выполнения этой команды")
+        return
+
+    sheets_service = bot.sheets_service
+    status_text = f"""
+📊 **Статус системы:**
+
+👥 Участников в базе: {len(sheets_service.participants_data)}
+🕐 {sheets_service.get_last_update_info()}
+📡 Данные {'устарели' if sheets_service.is_data_outdated() else 'актуальны'}
+
+🔧 Автообновление: каждые 30 минут
+"""
+    await update.message.reply_text(status_text)
 
 def main():
     """Основная функция запуска бота"""
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN не задан!")
+    if not validate_environment():
         return
-    
-    if not GOOGLE_SHEET_ID:
-        logger.error("GOOGLE_SHEET_ID не задан!")
-        return
-    
-    # Создание приложения
+
+    threading.Thread(target=run_health_server, daemon=True).start()
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Инициализация бота
     diploma_bot = DiplomaBot()
     application.bot_data['diploma_bot'] = diploma_bot
-    
-    # Регистрация обработчиков
+
+    asyncio.create_task(auto_update_task(diploma_bot.sheets_service))
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("diploma", diploma_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
-    # Запуск бота
-    logger.info("Бот запущен...")
+    application.add_handler(CommandHandler("reload", reload_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_updated))
+
+    logger.info("Bot started...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 import smtplib
 from email.message import EmailMessage
 
