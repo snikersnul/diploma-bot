@@ -17,6 +17,22 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from google.oauth2.service_account import Credentials
 pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))  # путь к файлу .ttf
 
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+def run_fake_server():
+    server_address = ('0.0.0.0', 10000)
+    httpd = HTTPServer(server_address, HealthHandler)
+    httpd.serve_forever()
+
+threading.Thread(target=run_fake_server, daemon=True).start()
+
 # Настройки логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
