@@ -1,8 +1,10 @@
 import logging
 import os
 import json
+import asyncio
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
 
 import gspread
 from reportlab.lib.pagesizes import A4
@@ -12,13 +14,15 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from google.oauth2.service_account import Credentials
-pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))  # путь к файлу .ttf
+pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
 
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import smtplib
+from email.message import EmailMessage
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -43,6 +47,7 @@ logger = logging.getLogger(__name__)
 # Конфигурация из переменных окружения
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
+ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip().isdigit()]
 
 # Создаем временный файл credentials из переменной окружения
 credentials_json = os.getenv('GOOGLE_CREDENTIALS')
@@ -58,6 +63,9 @@ class DiplomaBot:
         self.gc = None
         self.sheet = None
         self.participants_data = []
+        self.last_update = None
+        self.update_interval = 30 * 60  # 30 минут в секундах
+        self.auto_update_task = None
         self.init_google_sheets()
 
     def init_google_sheets(self):
@@ -75,6 +83,7 @@ class DiplomaBot:
 
             # Загрузка данных участников
             self.load_participants_data()
+            self.last_update = datetime.now()
 
         except Exception as e:
             logger.error(f"Ошибка инициализации Google Sheets: {e}")
@@ -85,10 +94,42 @@ class DiplomaBot:
             # Получаем все данные из таблицы
             records = self.sheet.get_all_records()
             self.participants_data = records
-            logger.info(f"Загружено {len(records)} участников")
+            self.last_update = datetime.now()
+            logger.info(f"Загружено {len(records)} участников в {self.last_update}")
             logger.info(f"Пример первой записи: {records[0] if records else 'Нет данных'}")    
         except Exception as e:
             logger.error(f"Ошибка загрузки данных: {e}")
+
+    def add_participant(self, name: str, email: str, role: str, points: int) -> bool:
+        """Добавление нового участника в таблицу"""
+        try:
+            # Добавляем новую строку в таблицу
+            self.sheet.append_row([name, email, role, points])
+            # Обновляем локальные данные
+            self.load_participants_data()
+            logger.info(f"Добавлен участник: {name}, {email}, {role}, {points}")
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка добавления участника: {e}")
+            return False
+
+    def remove_participant(self, email: str) -> bool:
+        """Удаление участника по email"""
+        try:
+            # Находим строку с указанным email
+            all_values = self.sheet.get_all_values()
+            for i, row in enumerate(all_values):
+                if len(row) > 1 and row[1].lower() == email.lower():
+                    # Удаляем строку (нумерация начинается с 1)
+                    self.sheet.delete_rows(i + 1)
+                    # Обновляем локальные данные
+                    self.load_participants_data()
+                    logger.info(f"Удален участник с email: {email}")
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка удаления участника: {e}")
+            return False
 
     def find_participant(self, query: str) -> Optional[Dict]:
         """Поиск участника по email или ФИО"""
@@ -174,7 +215,6 @@ class DiplomaBot:
         story.append(Paragraph("Организаторы конференции", normal_style))
         story.append(Spacer(1, 1*cm))
 
-        from datetime import datetime
         story.append(Paragraph(f"Дата: {datetime.now().strftime('%d.%m.%Y')}", normal_style))
 
         # Создание PDF
@@ -182,9 +222,84 @@ class DiplomaBot:
         buffer.seek(0)
         return buffer
 
+    def get_data_status(self) -> str:
+        """Получение статуса данных"""
+        if not self.last_update:
+            return "Данные не загружены"
+        
+        time_since_update = datetime.now() - self.last_update
+        minutes_ago = int(time_since_update.total_seconds() / 60)
+        
+        return f"Данные обновлены {minutes_ago} минут назад\nВсего участников: {len(self.participants_data)}"
+
+def send_email_with_attachment(to_email: str, pdf_buffer: BytesIO, filename: str):
+    """Отправка PDF диплома по email"""
+    try:
+        msg = EmailMessage()
+        msg['Subject'] = 'Ваш диплом конференции'
+        msg['From'] = os.getenv('EMAIL_USER')
+        msg['To'] = to_email
+        msg.set_content('Здравствуйте!\n\nВо вложении — ваш диплом.\n\nС уважением, команда конференции.')
+
+        # Прикрепляем PDF
+        pdf_data = pdf_buffer.read()
+        msg.add_attachment(pdf_data, maintype='application', subtype='pdf', filename=filename)
+
+        # Отправка
+        with smtplib.SMTP(os.getenv('EMAIL_HOST'), int(os.getenv('EMAIL_PORT'))) as smtp:
+            smtp.starttls()
+            smtp.login(os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
+            smtp.send_message(msg)
+
+        logger.info(f"📧 Email успешно отправлен на {to_email}")
+
+    except Exception as e:
+        logger.error(f"Ошибка отправки email: {e}")
+
+# Функция автоматического обновления данных
+async def auto_update_data(application):
+    """Автоматическое обновление данных каждые 30 минут"""
+    while True:
+        try:
+            await asyncio.sleep(30 * 60)  # 30 минут
+            bot = application.bot_data.get('diploma_bot')
+            if bot:
+                bot.load_participants_data()
+                logger.info("Автоматическое обновление данных выполнено")
+        except Exception as e:
+            logger.error(f"Ошибка автоматического обновления: {e}")
+
+def is_admin(user_id: int) -> bool:
+    """Проверка, является ли пользователь администратором"""
+    return user_id in ADMIN_IDS
+
+def get_main_keyboard(is_admin_user: bool = False):
+    """Получение основной клавиатуры"""
+    keyboard = [
+        [KeyboardButton("📜 Запросить диплом")],
+        [KeyboardButton("🔄 Обновить данные"), KeyboardButton("ℹ️ Статус данных")]
+    ]
+
+    if is_admin_user:
+        keyboard.append([KeyboardButton("👑 Админ панель")])
+
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_admin_keyboard():
+    """Получение клавиатуры для админов"""
+    keyboard = [
+        [KeyboardButton("➕ Добавить участника")],
+        [KeyboardButton("➖ Удалить участника")],
+        [KeyboardButton("🔙 Главное меню")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 # Обработчики команд
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
+    user_id = update.effective_user.id
+    is_admin_user = is_admin(user_id)
+
     welcome_text = """
 🎓 Добро пожаловать в систему выдачи дипломов!
 
@@ -197,11 +312,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Команды:
 /diploma - запросить диплом
 /help - помощь
-    """
+"""
 
-    keyboard = [[KeyboardButton("📜 Запросить диплом")]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    if is_admin_user:
+        welcome_text += "\n👑 Вы - администратор. Доступна админ панель."
 
+    reply_markup = get_main_keyboard(is_admin_user)
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
 async def diploma_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,21 +342,202 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Диплом за активное участие
 • Диплом призера
 
+Кнопки:
+🔄 Обновить данные - принудительно обновить базу участников
+ℹ️ Статус данных - информация о последнем обновлении
+
 ❓ Если возникли проблемы - обратитесь к организаторам конференции.
-    """
+"""
     await update.message.reply_text(help_text)
+
+async def handle_refresh_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки обновления данных"""
+    await update.message.reply_text("🔄 Обновляю данные…")
+
+    bot = context.bot_data.get('diploma_bot')
+    if not bot:
+        await update.message.reply_text("❌ Ошибка подключения к базе данных")
+        return
+
+    try:
+        bot.load_participants_data()
+        status = bot.get_data_status()
+        await update.message.reply_text(f"✅ Данные успешно обновлены!\n\n{status}")
+    except Exception as e:
+        await update.message.reply_text("❌ Ошибка при обновлении данных")
+        logger.error(f"Ошибка обновления данных: {e}")
+
+async def handle_data_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки статуса данных"""
+    bot = context.bot_data.get('diploma_bot')
+    if not bot:
+        await update.message.reply_text("❌ Ошибка подключения к базе данных")
+        return
+
+    status = bot.get_data_status()
+    await update.message.reply_text(f"📊 Статус данных:\n\n{status}")
+
+async def handle_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки админ панели"""
+    user_id = update.effective_user.id
+
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа к админ панели")
+        return
+
+    await update.message.reply_text(
+        "👑 Админ панель\n\nВыберите действие:",
+        reply_markup=get_admin_keyboard()
+    )
+
+async def handle_add_participant(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка добавления участника"""
+    user_id = update.effective_user.id
+
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа к этой функции")
+        return
+
+    await update.message.reply_text(
+        "➕ Добавление участника\n\n"
+        "Отправьте данные в формате:\n"
+        "ФИО,email,роль,баллы\n\n"
+        "Например: Иванов Иван Иванович,ivan@example.com,участник,25"
+    )
+
+    context.user_data['action'] = 'add_participant'
+
+async def handle_remove_participant(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка удаления участника"""
+    user_id = update.effective_user.id
+
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа к этой функции")
+        return
+
+    await update.message.reply_text(
+        "➖ Удаление участника\n\n"
+        "Отправьте email участника для удаления:"
+    )
+
+    context.user_data['action'] = 'remove_participant'
+
+async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню"""
+    user_id = update.effective_user.id
+    is_admin_user = is_admin(user_id)
+
+    context.user_data.clear()  # Очищаем данные действий
+
+    await update.message.reply_text(
+        "🏠 Главное меню",
+        reply_markup=get_main_keyboard(is_admin_user)
+    )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений"""
     query = update.message.text
 
-    # Игнорируем команды клавиатуры
+    # Обработка кнопок
     if query == "📜 Запросить диплом":
         await diploma_command(update, context)
         return
+    elif query == "🔄 Обновить данные":
+        await handle_refresh_data(update, context)
+        return
+    elif query == "ℹ️ Статус данных":
+        await handle_data_status(update, context)
+        return
+    elif query == "👑 Админ панель":
+        await handle_admin_panel(update, context)
+        return
+    elif query == "➕ Добавить участника":
+        await handle_add_participant(update, context)
+        return
+    elif query == "➖ Удалить участника":
+        await handle_remove_participant(update, context)
+        return
+    elif query == "🔙 Главное меню":
+        await handle_main_menu(update, context)
+        return
 
+    # Обработка админских действий
+    user_action = context.user_data.get('action')
+
+    if user_action == 'add_participant':
+        await process_add_participant(update, context, query)
+        return
+    elif user_action == 'remove_participant':
+        await process_remove_participant(update, context, query)
+        return
+
+    # Обычный поиск участника для диплома
+    await process_diploma_request(update, context, query)
+
+async def process_add_participant(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Обработка добавления участника"""
+    try:
+        parts = [part.strip() for part in data.split(',')]
+        if len(parts) != 4:
+            await update.message.reply_text(
+                "❌ Неверный формат данных!\n"
+                "Используйте: ФИО,email,роль,баллы"
+            )
+            return
+
+        name, email, role, points_str = parts
+        
+        try:
+            points = int(points_str)
+        except ValueError:
+            await update.message.reply_text("❌ Баллы должны быть числом!")
+            return
+        
+        bot = context.bot_data.get('diploma_bot')
+        if not bot:
+            await update.message.reply_text("❌ Ошибка подключения к базе данных")
+            return
+        
+        if bot.add_participant(name, email, role, points):
+            await update.message.reply_text(
+                f"✅ Участник успешно добавлен:\n"
+                f"ФИО: {name}\n"
+                f"Email: {email}\n"
+                f"Роль: {role}\n"
+                f"Баллы: {points}"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка при добавлении участника")
+        
+        context.user_data.clear()
+        
+    except Exception as e:
+        await update.message.reply_text("❌ Ошибка при обработке данных")
+        logger.error(f"Ошибка добавления участника: {e}")
+
+async def process_remove_participant(update: Update, context: ContextTypes.DEFAULT_TYPE, email: str):
+    """Обработка удаления участника"""
+    try:
+        bot = context.bot_data.get('diploma_bot')
+        if not bot:
+            await update.message.reply_text("❌ Ошибка подключения к базе данных")
+            return
+
+        if bot.remove_participant(email):
+            await update.message.reply_text(f"✅ Участник с email {email} успешно удален")
+        else:
+            await update.message.reply_text(f"❌ Участник с email {email} не найден")
+        
+        context.user_data.clear()
+        
+    except Exception as e:
+        await update.message.reply_text("❌ Ошибка при удалении участника")
+        logger.error(f"Ошибка удаления участника: {e}")
+
+async def process_diploma_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
+    """Обработка запроса на диплом"""
     # Поиск участника
-    await update.message.reply_text("🔍 Ищу вас в базе участников...")
+    await update.message.reply_text("🔍 Ищу вас в базе участников…")
 
     bot = context.bot_data.get('diploma_bot')
     if not bot:
@@ -280,6 +577,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename=filename,
             caption=f"🎓 Ваш {diploma_type.lower()} готов!"
         )
+        
         # Отправка PDF на email
         recipient_email = participant.get('email')
         if recipient_email:
@@ -291,6 +589,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 await update.message.reply_text("⚠️ Не удалось отправить диплом по email.")
                 logger.error(f"Ошибка при отправке email: {e}")
+                
     except Exception as e:
         logger.error(f"Ошибка генерации диплома: {e}")
         await update.message.reply_text(
@@ -314,6 +613,9 @@ def main():
     diploma_bot = DiplomaBot()
     application.bot_data['diploma_bot'] = diploma_bot
 
+    # Запуск автоматического обновления данных
+    asyncio.create_task(auto_update_data(application))
+
     # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("diploma", diploma_command))
@@ -322,33 +624,8 @@ def main():
 
     # Запуск бота
     logger.info("Бот запущен...")
+    logger.info(f"Администраторы: {ADMIN_IDS}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-import smtplib
-from email.message import EmailMessage
-
-def send_email_with_attachment(to_email: str, pdf_buffer: BytesIO, filename: str):
-    """Отправка PDF диплома по email"""
-    try:
-        msg = EmailMessage()
-        msg['Subject'] = 'Ваш диплом конференции'
-        msg['From'] = os.getenv('EMAIL_USER')
-        msg['To'] = to_email
-        msg.set_content('Здравствуйте!\n\nВо вложении — ваш диплом.\n\nС уважением, команда конференции.')
-
-        # Прикрепляем PDF
-        pdf_data = pdf_buffer.read()
-        msg.add_attachment(pdf_data, maintype='application', subtype='pdf', filename=filename)
-
-        # Отправка
-        with smtplib.SMTP(os.getenv('EMAIL_HOST'), int(os.getenv('EMAIL_PORT'))) as smtp:
-            smtp.starttls()
-            smtp.login(os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
-            smtp.send_message(msg)
-
-        logger.info(f"📧 Email успешно отправлен на {to_email}")
-
-    except Exception as e:
-        logger.error(f"Ошибка отправки email: {e}")
 
 if __name__ == '__main__':
     main()
