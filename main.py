@@ -437,7 +437,7 @@ async def handle_show_all_records(update: Update, context: ContextTypes.DEFAULT_
     """Обработка кнопки показа всех записей"""
     user_id = update.effective_user.id
     
-    if not_is_admin(user_id):
+    if not is_admin(user_id):
         await update.message.reply_text("❌ У вас нет прав доступа админа, обратитесь к @abiggerfish")
         return
     
