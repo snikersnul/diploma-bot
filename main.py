@@ -65,7 +65,6 @@ class DiplomaBot:
         self.participants_data = []
         self.last_update = None
         self.update_interval = 30 * 60  # 30 минут в секундах
-        self.auto_update_task = None
         self.init_google_sheets()
 
     def init_google_sheets(self):
@@ -256,18 +255,18 @@ def send_email_with_attachment(to_email: str, pdf_buffer: BytesIO, filename: str
     except Exception as e:
         logger.error(f"Ошибка отправки email: {e}")
 
-# Функция автоматического обновления данных
-async def auto_update_data(application):
+# Функция автоматического обновления данных (исправленная)
+async def auto_update_data(context: ContextTypes.DEFAULT_TYPE):
     """Автоматическое обновление данных каждые 30 минут"""
-    while True:
-        try:
-            await asyncio.sleep(30 * 60)  # 30 минут
-            bot = application.bot_data.get('diploma_bot')
-            if bot:
-                bot.load_participants_data()
-                logger.info("Автоматическое обновление данных выполнено")
-        except Exception as e:
-            logger.error(f"Ошибка автоматического обновления: {e}")
+    try:
+        bot = context.bot_data.get('diploma_bot')
+        if bot:
+            bot.load_participants_data()
+            logger.info("🔄 Автоматическое обновление данных выполнено")
+        else:
+            logger.warning("⚠️ DiplomaBot не найден в bot_data")
+    except Exception as e:
+        logger.error(f"❌ Ошибка автоматического обновления: {e}")
 
 def is_admin(user_id: int) -> bool:
     """Проверка, является ли пользователь администратором"""
@@ -613,8 +612,15 @@ def main():
     diploma_bot = DiplomaBot()
     application.bot_data['diploma_bot'] = diploma_bot
 
-    # Запуск автоматического обновления данных
-    asyncio.create_task(auto_update_data(application))
+    # Добавление задачи автоматического обновления данных (ИСПРАВЛЕНО)
+    job_queue = application.job_queue
+    job_queue.run_repeating(
+        auto_update_data,
+        interval=1800,  # 30 минут = 1800 секунд
+        first=1800,     # Первое выполнение через 30 минут после запуска
+        name='auto_update_data'
+    )
+    logger.info("🔄 Автоматическое обновление данных запланировано каждые 30 минут")
 
     # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
@@ -623,8 +629,8 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     # Запуск бота
-    logger.info("Бот запущен...")
-    logger.info(f"Администраторы: {ADMIN_IDS}")
+    logger.info("🚀 Бот запущен...")
+    logger.info(f"👑 Администраторы: {ADMIN_IDS}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
