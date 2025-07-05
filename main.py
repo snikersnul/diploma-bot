@@ -14,9 +14,10 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from google.oauth2.service_account import Credentials
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# Регистрация шрифта DejaVuSans, убедитесь, что файл 'DejaVuSans.ttf' находится рядом со скриптом
 pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
 
 import threading
@@ -24,6 +25,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import smtplib
 from email.message import EmailMessage
 
+# --- Health Check Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -35,16 +37,17 @@ def run_fake_server():
     httpd = HTTPServer(server_address, HealthHandler)
     httpd.serve_forever()
 
+# Запуск Health Check сервера в отдельном потоке
 threading.Thread(target=run_fake_server, daemon=True).start()
 
-# Настройки логирования
+# --- Настройки логирования ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Конфигурация из переменных окружения
+# --- Конфигурация из переменных окружения ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
 ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip().isdigit()]
@@ -58,6 +61,7 @@ if credentials_json:
 else:
     GOOGLE_CREDENTIALS_FILE = "credentials.json"
 
+# --- Класс бота для работы с дипломами ---
 class DiplomaBot:
     def __init__(self):
         self.gc = None
@@ -70,9 +74,8 @@ class DiplomaBot:
     def init_google_sheets(self):
         """Инициализация подключения к Google Sheets"""
         try:
-            # Настройка аутентификации
             scope = ['https://spreadsheets.google.com/feeds',
-                    'https://www.googleapis.com/auth/drive']
+                     'https://www.googleapis.com/auth/drive']
 
             creds = Credentials.from_service_account_file(
                 GOOGLE_CREDENTIALS_FILE, scopes=scope)
@@ -80,7 +83,6 @@ class DiplomaBot:
             self.gc = gspread.authorize(creds)
             self.sheet = self.gc.open_by_key(GOOGLE_SHEET_ID).sheet1
 
-            # Загрузка данных участников
             self.load_participants_data()
             self.last_update = datetime.now()
 
@@ -90,7 +92,6 @@ class DiplomaBot:
     def load_participants_data(self):
         """Загрузка данных участников из Google Sheets"""
         try:
-            # Получаем все данные из таблицы
             records = self.sheet.get_all_records()
             self.participants_data = records
             self.last_update = datetime.now()
@@ -102,10 +103,8 @@ class DiplomaBot:
     def add_participant(self, name: str, email: str, role: str, points: int) -> bool:
         """Добавление нового участника в таблицу"""
         try:
-            # Добавляем новую строку в таблицу
             self.sheet.append_row([name, email, role, points])
-            # Обновляем локальные данные
-            self.load_participants_data()
+            self.load_participants_data() # Обновляем локальные данные
             logger.info(f"Добавлен участник: {name}, {email}, {role}, {points}")
             return True
         except Exception as e:
@@ -115,14 +114,11 @@ class DiplomaBot:
     def remove_participant(self, email: str) -> bool:
         """Удаление участника по email"""
         try:
-            # Находим строку с указанным email
             all_values = self.sheet.get_all_values()
             for i, row in enumerate(all_values):
                 if len(row) > 1 and row[1].lower() == email.lower():
-                    # Удаляем строку (нумерация начинается с 1)
-                    self.sheet.delete_rows(i + 1)
-                    # Обновляем локальные данные
-                    self.load_participants_data()
+                    self.sheet.delete_rows(i + 1) # Удаляем строку (нумерация начинается с 1)
+                    self.load_participants_data() # Обновляем локальные данные
                     logger.info(f"Удален участник с email: {email}")
                     return True
             return False
@@ -135,21 +131,17 @@ class DiplomaBot:
         query_lower = query.lower().strip()
 
         for participant in self.participants_data:
-            # Поиск по email
             if 'email' in participant and participant['email'].lower() == query_lower:
                 return participant
 
-            # Поиск по ФИО
             name_field = participant.get('имя') or participant.get('name')
             if name_field:
                 name_lower = name_field.lower().strip()
                 name_words = set(name_lower.split())
                 query_words = set(query_lower.split())
 
-                # Все слова запроса должны присутствовать в имени
                 if query_words.issubset(name_words):
                     return participant
-
         return None
 
     def determine_diploma_type(self, participant: Dict) -> Tuple[str, str]:
@@ -158,19 +150,18 @@ class DiplomaBot:
         raw_points = participant.get('баллы', 0)
         try:
             points = int(raw_points) if str(raw_points).strip().isdigit() else 0
-        except Exception:
+        except ValueError: # Changed Exception to ValueError for specific error handling
             points = 0
 
-        # Определяем тип диплома
         if 'организатор' in role:
             return 'Диплом организатора', 'за организацию конференции'
         elif 'спикер' in role or 'докладчик' in role:
             return 'Диплом спикера', 'за выступление на конференции'
-        elif points >= 50:  # Порог для активного участия
+        elif points >= 50:
             return 'Диплом за активное участие', 'за активное участие в конференции'
         elif 'призер' in role:
             return 'Диплом призера', 'за призовое место'
-        elif points >= 20:  # Минимальный порог
+        elif points >= 20:
             return 'Диплом участника', 'за участие в конференции'
         else:
             return None, None
@@ -181,7 +172,6 @@ class DiplomaBot:
         doc = SimpleDocTemplate(buffer, pagesize=A4)
         story = []
 
-        # Стили
         styles = getSampleStyleSheet()
         title_style = styles['Title']
         title_style.alignment = TA_CENTER
@@ -193,7 +183,6 @@ class DiplomaBot:
         normal_style.fontSize = 14
         normal_style.fontName = 'DejaVuSans'
 
-        # Содержание диплома
         story.append(Spacer(1, 3*cm))
         story.append(Paragraph(diploma_type, title_style))
         story.append(Spacer(1, 2*cm))
@@ -216,7 +205,6 @@ class DiplomaBot:
 
         story.append(Paragraph(f"Дата: {datetime.now().strftime('%d.%m.%Y')}", normal_style))
 
-        # Создание PDF
         doc.build(story)
         buffer.seek(0)
         return buffer
@@ -231,6 +219,7 @@ class DiplomaBot:
         
         return f"Данные обновлены {minutes_ago} минут назад\nВсего участников: {len(self.participants_data)}"
 
+# --- Функции отправки email ---
 def send_email_with_attachment(to_email: str, pdf_buffer: BytesIO, filename: str):
     """Отправка PDF диплома по email"""
     try:
@@ -240,11 +229,9 @@ def send_email_with_attachment(to_email: str, pdf_buffer: BytesIO, filename: str
         msg['To'] = to_email
         msg.set_content('Здравствуйте!\n\nВо вложении — ваш диплом.\n\nС уважением, команда конференции.')
 
-        # Прикрепляем PDF
         pdf_data = pdf_buffer.read()
         msg.add_attachment(pdf_data, maintype='application', subtype='pdf', filename=filename)
 
-        # Отправка
         with smtplib.SMTP(os.getenv('EMAIL_HOST'), int(os.getenv('EMAIL_PORT'))) as smtp:
             smtp.starttls()
             smtp.login(os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
@@ -255,7 +242,7 @@ def send_email_with_attachment(to_email: str, pdf_buffer: BytesIO, filename: str
     except Exception as e:
         logger.error(f"Ошибка отправки email: {e}")
 
-# Функция автоматического обновления данных (исправленная)
+# --- Автоматическое обновление данных ---
 async def auto_update_data(context: ContextTypes.DEFAULT_TYPE):
     """Автоматическое обновление данных каждые 30 минут"""
     try:
@@ -268,6 +255,7 @@ async def auto_update_data(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Ошибка автоматического обновления: {e}")
 
+# --- Вспомогательные функции для Telegram ---
 def is_admin(user_id: int) -> bool:
     """Проверка, является ли пользователь администратором"""
     return user_id in ADMIN_IDS
@@ -293,7 +281,7 @@ def get_admin_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Обработчики команд
+# --- Обработчики команд Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
     user_id = update.effective_user.id
@@ -312,7 +300,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /diploma - запросить диплом
 /help - помощь
 """
-
     if is_admin_user:
         welcome_text += "\n👑 Вы - администратор. Доступна админ панель."
 
@@ -508,7 +495,7 @@ async def process_add_participant(update: Update, context: ContextTypes.DEFAULT_
         else:
             await update.message.reply_text("❌ Ошибка при добавлении участника")
         
-        context.user_data.clear()
+        context.user_data.clear() # Очищаем состояние после выполнения действия
         
     except Exception as e:
         await update.message.reply_text("❌ Ошибка при обработке данных")
@@ -527,7 +514,7 @@ async def process_remove_participant(update: Update, context: ContextTypes.DEFAU
         else:
             await update.message.reply_text(f"❌ Участник с email {email} не найден")
         
-        context.user_data.clear()
+        context.user_data.clear() # Очищаем состояние после выполнения действия
         
     except Exception as e:
         await update.message.reply_text("❌ Ошибка при удалении участника")
@@ -535,7 +522,6 @@ async def process_remove_participant(update: Update, context: ContextTypes.DEFAU
 
 async def process_diploma_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
     """Обработка запроса на диплом"""
-    # Поиск участника
     await update.message.reply_text("🔍 Ищу вас в базе участников…")
 
     bot = context.bot_data.get('diploma_bot')
@@ -552,7 +538,6 @@ async def process_diploma_request(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
-    # Определение типа диплома
     diploma_type, description = bot.determine_diploma_type(participant)
 
     if not diploma_type:
@@ -562,14 +547,12 @@ async def process_diploma_request(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
-    # Генерация диплома
     try:
         await update.message.reply_text(f"✅ Найден участник: {participant.get('имя', participant.get('name'))}")
         await update.message.reply_text(f"📜 Генерирую {diploma_type.lower()}...")
 
         pdf_buffer = bot.generate_diploma_pdf(participant, diploma_type, description)
 
-        # Отправка PDF
         filename = f"diploma_{participant.get('имя', 'participant').replace(' ', '_')}.pdf"
         await update.message.reply_document(
             document=pdf_buffer,
@@ -577,52 +560,55 @@ async def process_diploma_request(update: Update, context: ContextTypes.DEFAULT_
             caption=f"🎓 Ваш {diploma_type.lower()} готов!"
         )
         
-        # Отправка PDF на email
         recipient_email = participant.get('email')
         if recipient_email:
             try:
-                # Вернуть указатель на начало файла
-                pdf_buffer.seek(0)
+                pdf_buffer.seek(0) # Вернуть указатель на начало файла для повторного чтения
                 send_email_with_attachment(recipient_email, pdf_buffer, filename)
                 await update.message.reply_text(f"📬 Диплом также отправлен на email: {recipient_email}")
             except Exception as e:
                 await update.message.reply_text("⚠️ Не удалось отправить диплом по email.")
                 logger.error(f"Ошибка при отправке email: {e}")
-                
+            
     except Exception as e:
         logger.error(f"Ошибка генерации диплома: {e}")
         await update.message.reply_text(
             "❌ Ошибка при генерации диплома. Обратитесь к организаторам."
         )
 
+# --- Основная функция запуска бота ---
 def main():
     """Основная функция запуска бота"""
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN не задан!")
+        logger.error("TELEGRAM_BOT_TOKEN не задан! Бот не может быть запущен.")
         return
 
     if not GOOGLE_SHEET_ID:
-        logger.error("GOOGLE_SHEET_ID не задан!")
+        logger.error("GOOGLE_SHEET_ID не задан! Бот не может быть запущен.")
         return
 
     # Создание приложения
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Инициализация бота
+    # Инициализация бота для дипломов и добавление его в bot_data
     diploma_bot = DiplomaBot()
     application.bot_data['diploma_bot'] = diploma_bot
 
-    # Добавление задачи автоматического обновления данных (ИСПРАВЛЕНО)
+    # Получение job_queue и проверка на None
     job_queue = application.job_queue
-    job_queue.run_repeating(
-        auto_update_data,
-        interval=1800,  # 30 минут = 1800 секунд
-        first=1800,     # Первое выполнение через 30 минут после запуска
-        name='auto_update_data'
-    )
-    logger.info("🔄 Автоматическое обновление данных запланировано каждые 30 минут")
+    if job_queue is not None:
+        # Добавление задачи автоматического обновления данных
+        job_queue.run_repeating(
+            auto_update_data,
+            interval=1800,  # 30 минут = 1800 секунд
+            first=1800,     # Первое выполнение через 30 минут после запуска
+            name='auto_update_data'
+        )
+        logger.info("🔄 Автоматическое обновление данных запланировано каждые 30 минут")
+    else:
+        logger.warning("⚠️ JobQueue недоступен. Автоматическое обновление отключено.")
 
-    # Регистрация обработчиков
+    # Регистрация обработчиков команд и сообщений
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("diploma", diploma_command))
     application.add_handler(CommandHandler("help", help_command))
