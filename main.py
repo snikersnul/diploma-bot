@@ -3,7 +3,7 @@ import time
 import sys
 
 # Ваш токен бота
-BOT_TOKEN = "7754845550:AAH7-ciDXMkBWW5qgYMwq6C1wvMOrzWDa7w"
+BOT_TOKEN = ""
 
 def clear_bot_state():
     """Полная очистка состояния бота"""
